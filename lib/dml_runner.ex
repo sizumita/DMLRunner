@@ -2,17 +2,64 @@ defmodule DmlRunner do
   @moduledoc """
   Documentation for `DmlRunner`.
   """
+  @buildin ~w/+ - \/ */
 
-  @doc """
-  Hello world.
+  def get(dict, name) do
+    o = dict |> Enum.filter(fn x -> x.name == name end)
+    case o do
+      [] -> raise "Undefined: " <> name
+      [head | _tail] -> head
+    end
+  end
 
-  ## Examples
+  def expr(%{"type" => "assign"} = json, dict) do
+    [ %Variable{name: json["name"], value: expr(json["value"], dict)} | dict ]
+  end
 
-      iex> DmlRunner.hello()
-      :world
+  def expr(%{"type" => "value"} = json, _dict) do
+    json
+  end
 
-  """
-  def hello do
-    :world
+  def expr(%{"type" => "fun"} = json, _dict) do
+    json
+  end
+
+  def expr(%{"type" => "call", "func" => %{"type" => "var", "name" => name} = func } = json, dict) do
+    if @buildin |> Enum.any?(fn x -> x == name end) do
+      args = json["args"] |> Enum.map(fn x -> expr(x, dict) end)
+      Buildin.exec(name, args)
+    else
+      func = get(dict, name).value
+      new_dict = Enum.zip(func["args"], json["args"])
+                 |> Enum.reduce(
+                      dict,
+                      fn {name, value}, acc ->
+                        [ %Variable{name: name, value: expr(value, dict)} | acc ]
+                      end)
+      expr(func["content"], new_dict)
+    end
+  end
+
+  def expr(%{"type" => "call", "func" => %{"type" => "fun"} = func, "content" => content} = json, dict) do
+    new_dict = Enum.zip(func["args"], json["args"])
+               |> Enum.reduce(
+                    dict,
+                    fn {name, value}, acc ->
+                      [ %Variable{name: name, value: expr(value, dict)} | acc ]
+                    end)
+    expr(content, new_dict)
+  end
+
+  def expr(%{"type" => "var", "name" => name}, dict) do
+    get(dict, name).value
+  end
+
+  def expr(json, _dict) do
+    json
+  end
+
+  def run(raw) do
+    json = Jason.decode!(raw)
+    json |> Enum.reduce([], fn x, acc -> expr(x, acc) end)
   end
 end
