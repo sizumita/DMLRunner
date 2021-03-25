@@ -25,3 +25,5 @@ dml_runner-*.tar
 
 # Temporary files for e.g. tests
 /tmp
+
+/config/config.exs
