@@ -12,19 +12,19 @@ defmodule DmlRunner do
     end
   end
 
-  def expr(%{"type" => "assign"} = json, dict) do
+  def expr(%{"type" => "assign"} = json, {dict, _types}) do
     [ %Variable{name: json["name"], value: expr(json["value"], dict)} | dict ]
   end
 
-  def expr(%{"type" => "value"} = json, _dict) do
+  def expr(%{"type" => "value"} = json, _data) do
     json
   end
 
-  def expr(%{"type" => "fun"} = json, _dict) do
+  def expr(%{"type" => "fun"} = json, _data) do
     json
   end
 
-  def expr(%{"type" => "call", "func" => %{"type" => "var", "name" => name} = func } = json, dict) do
+  def expr(%{"type" => "call", "func" => %{"type" => "var", "name" => name} = func } = json, {dict, _types}) do
     if @buildin |> Enum.any?(fn x -> x == name end) do
       args = json["args"] |> Enum.map(fn x -> expr(x, dict) end)
       Buildin.exec(name, args)
@@ -40,7 +40,7 @@ defmodule DmlRunner do
     end
   end
 
-  def expr(%{"type" => "call", "func" => %{"type" => "fun"} = func, "content" => content} = json, dict) do
+  def expr(%{"type" => "call", "func" => %{"type" => "fun"} = func, "content" => content} = json, {dict, _types}) do
     new_dict = Enum.zip(func["args"], json["args"])
                |> Enum.reduce(
                     dict,
@@ -50,8 +50,12 @@ defmodule DmlRunner do
     expr(content, new_dict)
   end
 
-  def expr(%{"type" => "var", "name" => name}, dict) do
+  def expr(%{"type" => "var", "name" => name}, {dict, _types}) do
     get(dict, name).value
+  end
+
+  def expr(%{"type" => "typedef", "name" => name} = json, {dict, types}) do
+    {dict, Map.merge(types, TypeDef.from_json(json))}
   end
 
   def expr(json, _dict) do
@@ -60,6 +64,6 @@ defmodule DmlRunner do
 
   def run(raw) do
     json = Jason.decode!(raw)
-    json |> Enum.reduce([], fn x, acc -> expr(x, acc) end)
+    json |> Enum.reduce({[], %{}}, fn x, acc -> expr(x, acc) end)
   end
 end
