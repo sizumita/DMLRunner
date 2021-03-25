@@ -2,9 +2,9 @@ defmodule DmlRunner do
   @moduledoc """
   Documentation for `DmlRunner`.
   """
-  @buildin ~w/+ - \/ */
+  @buildin ~w/+ - \/ * get = > < >= <= !/
   @t """
-  [{"type":"assign","name":"a","value":{"type":"call","func": {"type":"fun","content":{"type":"call","func": {"type":"var","name":"+", "t":"'a"},"args":[{"type":"var","name":"b", "t":"'a"}, {"type":"value","value": 1,"t":"Integer"}]},"args":["b"]},"args":[{"type":"value","value": 2,"t":"Integer"}]}}]
+  [{"type":"assign","name":"loop","value":{"type":"fun","content":{"type":"call","func": {"type":"var","name":"if", "t":"'a"},"args":[{"type":"call","func": {"type":"var","name":">=", "t":"'a"},"args":[{"type":"var","name":"a", "t":"'a"}, {"type":"value","value": 10,"t":"Integer"}]}, {"type":"value","value": 0,"t":"Integer"}, {"type":"call","func": {"type":"var","name":"+", "t":"'a"},"args":[{"type":"value","value": 1,"t":"Integer"}, {"type":"call","func": {"type":"var","name":"loop", "t":"'a"},"args":[{"type":"call","func": {"type":"var","name":"+", "t":"'a"},"args":[{"type":"var","name":"a", "t":"'a"}, {"type":"value","value": 1,"t":"Integer"}]}]}]}]},"args":["a"]}}, {"type":"assign","name":"main","value":{"type":"fun","content":{"type":"call","func": {"type":"var","name":"loop", "t":"'a"},"args":[{"type":"value","value": 2,"t":"Integer"}]},"args":["_"]}}]
 
   """
 
@@ -21,11 +21,31 @@ defmodule DmlRunner do
   end
 
   def expr(%{"type" => "value"} = json, _data) do
+    # TODO tがStructだった時に定義されている構造体かどうかをみる
     json
   end
 
   def expr(%{"type" => "fun"} = json, _data) do
     json
+  end
+
+  def expr(%{"type" => "call", "func" => %{"type" => "var", "name" => "__" <> name}} = json, {dict, types}) do
+    args = json["args"] |> Enum.map(fn x -> expr(x, {dict, types}) end)
+    Buildin.exec(name, args)
+  end
+
+  def expr(%{"type" => "call", "func" => %{"type" => "var", "name" => "if"}} = json, data) do
+    [formula, then, els] = json["args"]
+    result = expr(formula, data)
+    case result["type"] do
+      "value" ->
+        if result["value"] == true do
+          expr(then, data)
+        else
+          expr(els, data)
+        end
+      _ -> raise "missing value type"
+    end
   end
 
   def expr(%{"type" => "call", "func" => %{"type" => "var", "name" => name} = func } = json, {dict, types}) do
@@ -38,26 +58,9 @@ defmodule DmlRunner do
                  |> Enum.reduce(
                       dict,
                       fn {name, value}, acc ->
-                        [ %Variable{name: name, value: expr(value, dict)} | acc ]
+                        [ %Variable{name: name, value: expr(value, {dict, types})} | acc ]
                       end)
       expr(func["content"], {new_dict, types})
-    end
-  end
-
-  def expr(%{"type" => "block", "contents" => contents}, data) do
-    r = contents |> Enum.reduce(
-                  {nil, data},
-    fn x, {_y, data_} ->
-      case expr(x, data_) do
-        {_dict, _types} = result -> {nil, result}
-        v -> {v, data_}
-      end
-    end)
-
-    IO.inspect r
-    case r do
-      {nil, _data} -> raise "Block stmt have to return value"
-      {value, data}  -> expr(value, data)
     end
   end
 
@@ -66,13 +69,37 @@ defmodule DmlRunner do
                |> Enum.reduce(
                     dict,
                     fn {name, value}, acc ->
-                      [ %Variable{name: name, value: expr(value, dict)} | acc ]
+                      [ %Variable{name: name, value: expr(value, {dict, types})} | acc ]
                     end)
     expr(content, {new_dict, types})
   end
 
+  def expr(%{"type" => "call", "func" => func, "args" => args} = json, data) do
+    expr(%{"type" => "call", "func" => expr(func, data), "args" => args}, data)
+  end
+
+  def expr(%{"type" => "block", "contents" => contents}, data) do
+    r = contents |> Enum.reduce(
+                      {nil, data},
+                      fn x, {_y, data_} ->
+                        case expr(x, data_) do
+                          {_dict, _types} = result -> {nil, result}
+                          v -> {v, data_}
+                        end
+                      end)
+
+    case r do
+      {nil, _data} -> raise "Block stmt have to return value"
+      {value, data}  -> expr(value, data)
+    end
+  end
+
   def expr(%{"type" => "var", "name" => name}, {dict, _types}) do
     get(dict, name).value
+  end
+
+  def expr(%{"type" => "name_space_var"} = json, {dict, _types}) do
+    json
   end
 
   def expr(%{"type" => "typedef", "name" => name} = json, {dict, types}) do
@@ -87,6 +114,8 @@ defmodule DmlRunner do
 
   def run do
     json = Jason.decode!(@t)
-    json |> Enum.reduce({[], %{}}, fn x, acc -> expr(x, acc) end)
+    {dict, types} = json |> Enum.reduce({[], %{}}, fn x, acc -> expr(x, acc) end)
+    main = get(dict, "main").value
+    expr(%{"type" => "call", "func" => main, "args" => [%{"type" => "value", "value" => "()", "t" => "Unit"}]}, {dict, types})
   end
 end
